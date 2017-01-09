@@ -25,9 +25,7 @@ import java.util.function.IntToDoubleFunction;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static org.multiverse.api.StmUtils.atomic;
-import static org.multiverse.api.StmUtils.newTxnDouble;
-import static org.multiverse.api.StmUtils.newTxnInteger;
+import static org.multiverse.api.StmUtils.*;
 
 public class SortingPipeline {
     private static boolean PRINT = false;
@@ -45,7 +43,9 @@ public class SortingPipeline {
         //Supplier<BlockingDoubleQueue> queueSupplier = () -> new BlockingNDoubleQueue();
         //Supplier<BlockingDoubleQueue> queueSupplier = () -> new UnboundedDoubleQueue();
         //Supplier<BlockingDoubleQueue> queueSupplier = () -> new NolockNDoubleQueue();
-        Supplier<BlockingDoubleQueue> queueSupplier = () -> new MSUnboundedDoubleQueue();
+        //Supplier<BlockingDoubleQueue> queueSupplier = () -> new MSUnboundedDoubleQueue();
+        Supplier<BlockingDoubleQueue> queueSupplier = () -> new StmBlockingNDoubleQueue();
+
 
         BlockingDoubleQueue[] queues = Stream
                 .generate(queueSupplier)
@@ -79,7 +79,13 @@ public class SortingPipeline {
             return arr1[0];
         });*/
 
-        Mark7("sortPipeline - MSUnboundedDoubleQueue", i -> {
+        /*Mark7("sortPipeline - MSUnboundedDoubleQueue", i -> {
+            final double[] arr1 = DoubleArray.randomPermutation(count);
+            sortPipeline(arr1, P, queues);
+            return arr1[0];
+        });*/
+
+        Mark7("sortPipeline - StmBlockingNDoubleQueue", i -> {
             final double[] arr1 = DoubleArray.randomPermutation(count);
             sortPipeline(arr1, P, queues);
             return arr1[0];
@@ -419,7 +425,7 @@ class UnboundedDoubleQueue implements BlockingDoubleQueue {
 }
 
 class NolockNDoubleQueue implements BlockingDoubleQueue {
-    private final Double[] queue = new Double[50];
+    private final double[] queue = new double[50];
     private volatile int head = 0;
     private volatile int tail = 0;
 
@@ -503,9 +509,9 @@ class MSUnboundedDoubleQueue implements BlockingDoubleQueue{
 }
 
 class StmBlockingNDoubleQueue implements BlockingDoubleQueue {
+    private final TxnInteger head, tail;
     private final TxnDouble[] queue;
-    private final TxnInteger head;
-    private final TxnInteger tail;
+    private final TxnInteger availableItems, availableSpaces;
 
     StmBlockingNDoubleQueue(){
         queue = Stream.generate(() -> newTxnDouble(0))
@@ -513,21 +519,41 @@ class StmBlockingNDoubleQueue implements BlockingDoubleQueue {
                 .toArray(TxnDouble[]::new);
         head = newTxnInteger(0);
         tail = newTxnInteger(0);
+        availableItems = newTxnInteger(0);
+        availableSpaces = newTxnInteger(50);
     }
 
     @Override
     public double take()
     {
         return atomic(() -> {
-            // TODO
-            return queue[head.get()].get();
+            if(availableItems.get() == 0){
+                retry();
+                return 0.0; // Unused.
+            } else {
+                availableItems.decrement();
+                double item = queue[head.get()].get();
+                queue[head.get()].set(0.0);
+                head.set((head.get() + 1) % queue.length);
+                availableSpaces.increment();
+                return item;
+            }
         });
     }
 
     @Override
     public void put(double item)
     {
-
+        atomic(() -> {
+            if(availableSpaces.get() == 0){
+                retry();
+            } else {
+                availableSpaces.decrement();
+                queue[tail.get()].set(item);
+                tail.set((tail.get() + 1) % queue.length);
+                availableItems.increment();
+            }
+        });
     }
 }
 

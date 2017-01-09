@@ -82,11 +82,13 @@ class DoubleArrayList {
 
     // The double list formatted as eg "[3.2, 4.7]"
     public String toString() {
+        synchronized (slock){
         synchronized (ilock){
             StringBuilder sb = new StringBuilder("[");
             for (int i=0; i<size; i++)
                 sb.append(i > 0 ? ", " : "").append(items[i]);
             return sb.append("]").toString();
-        }
+        }}
+
     }
 }
